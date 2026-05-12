@@ -1,0 +1,140 @@
+# selene-mcp-server
+
+[SELENE (ServerlessKakeibo)](https://kakeibo.riri-inferno.com/) の GET 系エンドポイントを LLM から扱えるようにする MCP (Model Context Protocol) サーバ。
+
+TypeScript 製、stdio トランスポート、Docker で配布可能。Claude Desktop / Claude Code / MCP Inspector などの MCP クライアントから利用できる。
+
+## なぜ作ったか
+
+SELENE は家計簿アプリで、Web UI で取引・統計・カテゴリを閲覧できる。この MCP サーバを Claude に繋ぐと、LLM が「先月の支出は？」「カテゴリ何ある？」のような質問を、API を自律的に叩いて答えられるようになる。
+
+## ステータス: 学習用 PoC
+
+このリポジトリは **ハンズオンで MCP の概念を習得しながら作った PoC** の段階。日常的に使えるレベルへの本格開発は、SELENE 本体側に API キー認証が実装されてから着手予定。
+
+### 今できていること（baseline）
+- TypeScript で MCP サーバを実装、stdio で MCP プロトコルを話せる
+- SELENE の **GET 4種** (`get_transaction_categories` / `get_transactions` / `get_monthly_summary` / `get_statistics_monthly_comparison`) を Tool として提供
+- Zod による入力スキーマ → JSON Schema 自動変換、LLM への引数仕様提示
+- Docker イメージ化、`docker run -i --rm -e ... selene-mcp:latest` で MCP クライアントから繋がる
+- MCP Inspector で実 API を呼んで本番データが取れることを確認済み
+
+### 現状の制約
+- 認証は **SELENE の OAuth (Google/GitHub) でブラウザログインし、開発者ツール等で取り出した JWT を環境変数 `SELENE_JWT_TOKEN` に手で入れる** 運用。JWT には有効期限があるため恒久利用には向かない。
+- 書き込み系（POST/PUT/DELETE）Tool は未実装。
+
+### 本格開発の前提条件
+- [ ] SELENE 本体（[Riri-Inferno/ServerlessKakeibo](https://github.com/Riri-Inferno/ServerlessKakeibo)）に **`UserEntity` 紐付きの API キー発行導線**を実装
+- [ ] 同じく SELENE 本体に **API キーを Bearer 同等として受け付ける認証ミドルウェア**を実装
+- 上記が揃ってから、当リポジトリで `SELENE_API_KEY` 経由の認証に切り替え、残りの GET / POST 系 Tool を順次追加していく予定。
+
+## クイックスタート（Docker）
+
+```bash
+# ビルド
+docker build -t selene-mcp:latest .
+
+# 動作確認（任意の MCP クライアントから）
+docker run -i --rm \
+  -e SELENE_JWT_TOKEN="Bearer eyJ..." \
+  -e SELENE_API_BASE_URL="https://api-kakeibo.riri-inferno.com" \
+  selene-mcp:latest
+```
+
+## MCP クライアントへの登録
+
+Claude Desktop の `claude_desktop_config.json` または Claude Code の `.mcp.json` / `settings.json` の `mcpServers` に：
+
+```json
+{
+  "mcpServers": {
+    "selene": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-e", "SELENE_JWT_TOKEN",
+        "-e", "SELENE_API_BASE_URL",
+        "selene-mcp:latest"
+      ],
+      "env": {
+        "SELENE_JWT_TOKEN": "Bearer eyJ...",
+        "SELENE_API_BASE_URL": "https://api-kakeibo.riri-inferno.com"
+      }
+    }
+  }
+}
+```
+
+## 環境変数
+
+| 名前 | 必須 | 既定値 | 説明 |
+|---|---|---|---|
+| `SELENE_JWT_TOKEN` | ✅ | — | SELENE で発行された JWT。`Bearer ` プレフィックスは付いていてもなくても良い |
+| `SELENE_API_BASE_URL` | — | `https://api-kakeibo.riri-inferno.com` | API ホスト。ローカル開発時は `http://localhost:8080` 等 |
+
+> ⚠️ 現状の認証は SELENE 本体の OAuth (Google/GitHub) 経由で取得した JWT を都度共有する運用。将来的に SELENE 側に API キー発行導線を追加予定。
+
+## 提供している Tool
+
+| Tool 名 | 概要 | エンドポイント |
+|---|---|---|
+| `get_transaction_categories` | 取引カテゴリ一覧（マスタ+カスタム） | `GET /api/categories/transaction` |
+| `get_transactions` | 取引一覧（page/期間/カテゴリ/金額/種別でフィルタ） | `GET /Transaction` |
+| `get_monthly_summary` | 月次サマリ（収入/支出/差引/トップ3カテゴリ） | `GET /TransactionSummary/monthly` |
+| `get_statistics_monthly_comparison` | 前月比込み月次サマリ | `GET /api/Statistics/monthly-comparison` |
+
+各 Tool の引数仕様は `src/tools/*.ts` の Zod スキーマ（`.describe()` 付き）を参照。
+
+## 開発
+
+```bash
+# 依存インストール
+npm install
+
+# 開発実行（tsx で TS を直接実行）
+npm run dev
+
+# MCP Inspector で動作確認
+export SELENE_JWT_TOKEN="Bearer eyJ..."
+export SELENE_API_BASE_URL="https://api-kakeibo.riri-inferno.com"
+npm run inspect
+# → http://localhost:6274/ をブラウザで開く
+
+# 型チェック
+npx tsc --noEmit
+
+# ビルド
+npm run build
+```
+
+### プロジェクト構成
+
+```
+src/
+├── index.ts             # 起動 + 各 Tool の register 呼び出し
+├── seleneClient.ts      # 共通 HTTP ヘルパ（base URL + Bearer + クエリ整形）
+└── tools/
+    ├── categories.ts
+    ├── transactions.ts
+    ├── monthlySummary.ts
+    └── monthlyComparison.ts
+```
+
+各 Tool ファイルは `export function register(server: McpServer): void` を export する。新しい GET を追加する場合：
+
+1. `src/tools/<新Tool>.ts` を作成し、`register(server)` を実装
+2. `src/index.ts` で import → `register(server)` を呼ぶ
+3. `npm run dev` → Inspector で `tools/list` に出ること、`tools/call` でデータが返ることを確認
+
+## 技術スタック
+
+- TypeScript on Node.js 22
+- [`@modelcontextprotocol/sdk`](https://github.com/modelcontextprotocol/typescript-sdk)
+- [Zod](https://zod.dev/) — Tool 入力スキーマ → JSON Schema 自動変換
+- Docker (multi-stage, alpine)
+
+## 参考
+
+- [Model Context Protocol 公式](https://modelcontextprotocol.io/)
+- 配布パターンの参考実装: [nulab/backlog-mcp-server](https://github.com/nulab/backlog-mcp-server)
+- SELENE 本体: [Riri-Inferno/ServerlessKakeibo](https://github.com/Riri-Inferno/ServerlessKakeibo)
