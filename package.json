@@ -1,0 +1,28 @@
+{
+  "name": "selene-mcp-server",
+  "version": "0.1.0",
+  "description": "MCP server that exposes SELENE (ServerlessKakeibo) GET endpoints as tools",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "selene-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "inspect": "npx @modelcontextprotocol/inspector tsx src/index.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.7.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
+  }
+}
