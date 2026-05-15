@@ -8,7 +8,7 @@ import * as monthlyComparison from "./tools/monthlyComparison.js";
 
 const server = new McpServer({
   name: "selene-mcp-server",
-  version: "0.2.0",
+  version: "0.3.0",
 });
 
 categories.register(server);
