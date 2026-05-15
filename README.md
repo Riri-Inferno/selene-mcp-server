@@ -8,25 +8,25 @@ TypeScript 製、stdio トランスポート、Docker で配布可能。Claude D
 
 SELENE は家計簿アプリで、Web UI で取引・統計・カテゴリを閲覧できる。この MCP サーバを Claude に繋ぐと、LLM が「先月の支出は？」「カテゴリ何ある？」のような質問を、API を自律的に叩いて答えられるようになる。
 
-## ステータス: 学習用 PoC
+## ステータス: API キー認証対応版
 
-このリポジトリは **ハンズオンで MCP の概念を習得しながら作った PoC** の段階。日常的に使えるレベルへの本格開発は、SELENE 本体側に API キー認証が実装されてから着手予定。
+SELENE 本体側に **ユーザー単位の長寿命 API キー** 発行・認証の仕組みが入ったので、当リポジトリも JWT 直貼り運用から API キー (`SELENE_API_KEY`) 運用へ切り替えた。これ以降、残りの GET / POST 系 Tool を順次追加していく予定。
 
-### 今できていること（baseline）
+API キーの設計仕様は SELENE 本体リポジトリの [`Document/Architecture/api-key-auth.md`](https://github.com/Riri-Inferno/ServerlessKakeibo/blob/main/Document/Architecture/api-key-auth.md) 参照。要点:
+
+- API キーは SELENE の Web UI から発行する（`slk_` で始まる長寿命トークン）
+- 送信は **JWT と同じ `Authorization: Bearer <key>`** ヘッダ。スキーム判別は接頭辞 (`slk_` / `eyJ`) で行われる
+- 初期リリースでは `read` スコープのキーのみ発行可能。書き込み系 Tool が必要になった時点で `write` スコープを別途検討
+
+### 今できていること
 - TypeScript で MCP サーバを実装、stdio で MCP プロトコルを話せる
 - SELENE の **GET 4種** (`get_transaction_categories` / `get_transactions` / `get_monthly_summary` / `get_statistics_monthly_comparison`) を Tool として提供
 - Zod による入力スキーマ → JSON Schema 自動変換、LLM への引数仕様提示
 - Docker イメージ化、`docker run -i --rm -e ... selene-mcp:latest` で MCP クライアントから繋がる
-- MCP Inspector で実 API を呼んで本番データが取れることを確認済み
+- `SELENE_API_KEY` 経由の認証（`slk_` プレフィックス未一致時は起動時に警告）
 
 ### 現状の制約
-- 認証は **SELENE の OAuth (Google/GitHub) でブラウザログインし、開発者ツール等で取り出した JWT を環境変数 `SELENE_JWT_TOKEN` に手で入れる** 運用。JWT には有効期限があるため恒久利用には向かない。
-- 書き込み系（POST/PUT/DELETE）Tool は未実装。
-
-### 本格開発の前提条件
-- [ ] SELENE 本体（[Riri-Inferno/ServerlessKakeibo](https://github.com/Riri-Inferno/ServerlessKakeibo)）に **`UserEntity` 紐付きの API キー発行導線**を実装
-- [ ] 同じく SELENE 本体に **API キーを Bearer 同等として受け付ける認証ミドルウェア**を実装
-- 上記が揃ってから、当リポジトリで `SELENE_API_KEY` 経由の認証に切り替え、残りの GET / POST 系 Tool を順次追加していく予定。
+- 書き込み系（POST/PUT/DELETE）Tool は未実装。SELENE 側で `write` スコープを発行可能にする UI が整ってから着手予定
 
 ## クイックスタート（Docker）
 
@@ -36,7 +36,7 @@ docker build -t selene-mcp:latest .
 
 # 動作確認（任意の MCP クライアントから）
 docker run -i --rm \
-  -e SELENE_JWT_TOKEN="Bearer eyJ..." \
+  -e SELENE_API_KEY="slk_..." \
   -e SELENE_API_BASE_URL="https://api-kakeibo.riri-inferno.com" \
   selene-mcp:latest
 ```
@@ -52,12 +52,12 @@ Claude Desktop の `claude_desktop_config.json` または Claude Code の `.mcp.
       "command": "docker",
       "args": [
         "run", "-i", "--rm",
-        "-e", "SELENE_JWT_TOKEN",
+        "-e", "SELENE_API_KEY",
         "-e", "SELENE_API_BASE_URL",
         "selene-mcp:latest"
       ],
       "env": {
-        "SELENE_JWT_TOKEN": "Bearer eyJ...",
+        "SELENE_API_KEY": "slk_...",
         "SELENE_API_BASE_URL": "https://api-kakeibo.riri-inferno.com"
       }
     }
@@ -69,10 +69,10 @@ Claude Desktop の `claude_desktop_config.json` または Claude Code の `.mcp.
 
 | 名前 | 必須 | 既定値 | 説明 |
 |---|---|---|---|
-| `SELENE_JWT_TOKEN` | ✅ | — | SELENE で発行された JWT。`Bearer ` プレフィックスは付いていてもなくても良い |
+| `SELENE_API_KEY` | ✅ | — | SELENE で発行された API キー。`slk_` で始まる文字列。`Bearer ` プレフィックスは付いていてもなくても良い（内部で剥がす） |
 | `SELENE_API_BASE_URL` | — | `https://api-kakeibo.riri-inferno.com` | API ホスト。ローカル開発時は `http://localhost:8080` 等 |
 
-> ⚠️ 現状の認証は SELENE 本体の OAuth (Google/GitHub) 経由で取得した JWT を都度共有する運用。将来的に SELENE 側に API キー発行導線を追加予定。
+> ⚠️ API キーは発行時の 1 回のみ平文で表示され、以降は再表示できない（SELENE 側で PBKDF2 ハッシュ保存）。漏洩した場合は SELENE の UI から個別失効してから再発行する。
 
 ## 提供している Tool
 
@@ -95,7 +95,7 @@ npm install
 npm run dev
 
 # MCP Inspector で動作確認
-export SELENE_JWT_TOKEN="Bearer eyJ..."
+export SELENE_API_KEY="slk_..."
 export SELENE_API_BASE_URL="https://api-kakeibo.riri-inferno.com"
 npm run inspect
 # → http://localhost:6274/ をブラウザで開く
@@ -138,3 +138,4 @@ src/
 - [Model Context Protocol 公式](https://modelcontextprotocol.io/)
 - 配布パターンの参考実装: [nulab/backlog-mcp-server](https://github.com/nulab/backlog-mcp-server)
 - SELENE 本体: [Riri-Inferno/ServerlessKakeibo](https://github.com/Riri-Inferno/ServerlessKakeibo)
+- API キー認証 設計ドキュメント: [`Document/Architecture/api-key-auth.md`](https://github.com/Riri-Inferno/ServerlessKakeibo/blob/main/Document/Architecture/api-key-auth.md)

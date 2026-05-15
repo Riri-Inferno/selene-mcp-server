@@ -1,13 +1,18 @@
 const SELENE_API_BASE_URL =
   process.env.SELENE_API_BASE_URL ?? "https://api-kakeibo.riri-inferno.com";
 
-const SELENE_JWT_TOKEN = process.env.SELENE_JWT_TOKEN
+const SELENE_API_KEY = process.env.SELENE_API_KEY
   ?.replace(/^Bearer\s+/i, "")
   .trim();
 
-if (!SELENE_JWT_TOKEN) {
+if (!SELENE_API_KEY) {
   console.error(
-    "[selene-mcp] WARNING: SELENE_JWT_TOKEN is not set. All tool calls will fail with 401."
+    "[selene-mcp] WARNING: SELENE_API_KEY is not set. All tool calls will fail with 401."
+  );
+} else if (!SELENE_API_KEY.startsWith("slk_")) {
+  console.error(
+    "[selene-mcp] WARNING: SELENE_API_KEY does not start with 'slk_'. " +
+      "SELENE issues API keys with the 'slk_' prefix; you may have pasted a JWT or an invalid value."
   );
 }
 
@@ -30,7 +35,7 @@ export async function seleneGet(
   }
   const res = await fetch(url, {
     headers: {
-      Authorization: `Bearer ${SELENE_JWT_TOKEN ?? ""}`,
+      Authorization: `Bearer ${SELENE_API_KEY ?? ""}`,
       Accept: "application/json",
     },
   });

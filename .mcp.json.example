@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "selene": {
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e",
+        "SELENE_API_KEY",
+        "-e",
+        "SELENE_API_BASE_URL",
+        "selene-mcp:latest"
+      ],
+      "env": {
+        "SELENE_API_KEY": "slk_REPLACE_WITH_YOUR_KEY",
+        "SELENE_API_BASE_URL": "https://api-kakeibo.riri-inferno.com"
+      }
+    }
+  }
+}
