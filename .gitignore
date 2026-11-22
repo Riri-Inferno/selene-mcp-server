@@ -39,3 +39,6 @@ next-env.d.ts
 bearer
 worklog.md
 .mcp.json
+
+# build output
+/dist
