@@ -20,7 +20,8 @@ API キーの設計仕様は SELENE 本体リポジトリの [`Document/Architec
 
 ### 今できていること
 - TypeScript で MCP サーバを実装、stdio で MCP プロトコルを話せる
-- SELENE の **GET 4種** (`get_transaction_categories` / `get_transactions` / `get_monthly_summary` / `get_statistics_monthly_comparison`) を Tool として提供
+- SELENE の **GET 12種**（取引・カテゴリ・統計・ユーザー設定）を Tool として提供（一覧は「提供している Tool」参照）
+- API エラー時は、ステータスごとの対処方法を添えて `isError` の結果としてモデルに返す
 - Zod による入力スキーマ → JSON Schema 自動変換、LLM への引数仕様提示
 - Docker イメージ化、`docker run -i --rm -e ... selene-mcp:latest` で MCP クライアントから繋がる
 - `SELENE_API_KEY` 経由の認証（`slk_` プレフィックス未一致時は起動時に警告）
@@ -82,6 +83,14 @@ Claude Desktop の `claude_desktop_config.json` または Claude Code の `.mcp.
 | `get_transactions` | 取引一覧（page/期間/カテゴリ/金額/種別でフィルタ） | `GET /Transaction` |
 | `get_monthly_summary` | 月次サマリ（収入/支出/差引/トップ3カテゴリ） | `GET /TransactionSummary/monthly` |
 | `get_statistics_monthly_comparison` | 前月比込み月次サマリ | `GET /api/Statistics/monthly-comparison` |
+| `get_transaction_detail` | 取引詳細（品目・税・店舗情報） | `GET /Transaction/{id}` |
+| `get_statistics_category_breakdown` | カテゴリ別支出内訳（金額・構成比） | `GET /api/Statistics/category-breakdown` |
+| `get_statistics_trend` | 月次の収支推移（最大24か月） | `GET /api/Statistics/trend` |
+| `get_statistics_highlights` | 月次ハイライト（最大支出・最多カテゴリなど） | `GET /api/Statistics/highlights` |
+| `get_statistics_date_range` | 取引データの日付範囲 | `GET /api/Statistics/date-range` |
+| `get_item_categories` | 商品カテゴリ一覧（支出の品目用） | `GET /api/categories/item` |
+| `get_income_item_categories` | 給与項目カテゴリ一覧（収入の明細用） | `GET /api/categories/income-item` |
+| `get_user_settings` | ユーザー設定（締め日・タイムゾーン・通貨など） | `GET /api/user/settings` |
 
 各 Tool の引数仕様は `src/tools/*.ts` の Zod スキーマ（`.describe()` 付き）を参照。
 
@@ -116,8 +125,12 @@ src/
 └── tools/
     ├── categories.ts
     ├── transactions.ts
+    ├── transactionDetail.ts
     ├── monthlySummary.ts
-    └── monthlyComparison.ts
+    ├── monthlyComparison.ts
+    ├── statistics.ts
+    ├── itemCategories.ts
+    └── userSettings.ts
 ```
 
 各 Tool ファイルは `export function register(server: McpServer): void` を export する。新しい GET を追加する場合：
