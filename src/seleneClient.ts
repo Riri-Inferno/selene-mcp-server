@@ -22,26 +22,36 @@ export function getBaseUrl(): string {
 
 export type QueryValue = string | number | boolean | Date | undefined | null;
 
-export async function seleneGet(
+type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
+
+async function seleneRequest(
+  method: HttpMethod,
   path: string,
-  query?: Record<string, QueryValue>
+  options: { query?: Record<string, QueryValue>; body?: unknown } = {}
 ): Promise<string> {
   const url = new URL(path, SELENE_API_BASE_URL);
-  if (query) {
-    for (const [k, v] of Object.entries(query)) {
+  if (options.query) {
+    for (const [k, v] of Object.entries(options.query)) {
       if (v === undefined || v === null) continue;
       url.searchParams.set(k, v instanceof Date ? v.toISOString() : String(v));
     }
   }
-  const target = `GET ${url.pathname}${url.search}`;
+  const target = `${method} ${url.pathname}${url.search}`;
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${SELENE_API_KEY ?? ""}`,
+    Accept: "application/json",
+  };
+  if (options.body !== undefined) {
+    headers["Content-Type"] = "application/json";
+  }
 
   let res: Response;
   try {
     res = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${SELENE_API_KEY ?? ""}`,
-        Accept: "application/json",
-      },
+      method,
+      headers,
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
@@ -62,6 +72,22 @@ export async function seleneGet(
   return body;
 }
 
+export function seleneGet(path: string, query?: Record<string, QueryValue>): Promise<string> {
+  return seleneRequest("GET", path, { query });
+}
+
+export function selenePost(path: string, body?: unknown): Promise<string> {
+  return seleneRequest("POST", path, { body });
+}
+
+export function selenePut(path: string, body: unknown): Promise<string> {
+  return seleneRequest("PUT", path, { body });
+}
+
+export function seleneDelete(path: string): Promise<string> {
+  return seleneRequest("DELETE", path);
+}
+
 /**
  * HTTP ステータスごとに、モデルが次に取るべき行動を返す。
  * Tool のエラーは MCP SDK が isError: true の結果としてモデルに渡すので、
@@ -73,10 +99,10 @@ function hintForStatus(status: number): string {
       return "リクエストの引数が不正です。本文のエラー内容を見て引数を直してから再実行してください。";
     case 401:
       return SELENE_API_KEY
-        ? "API キーが認証されませんでした。考えられる原因: キーの有効期限切れ・失効・誤り、またはこのエンドポイントが API キー認証に未対応。引数を変えても解決しないので、ユーザーに SELENE の設定画面でキーの状態を確認するよう伝えてください。"
+        ? "API キーが認証されませんでした。本文の message に理由があります。キーが無効なら SELENE の設定画面でキーの状態を確認するよう、API キーでは利用できない操作なら SELENE の画面から操作するよう、ユーザーに伝えてください。引数を変えて再試行しても解決しません。"
         : "SELENE_API_KEY が設定されていません。ユーザーに API キーの設定を依頼してください。";
     case 403:
-      return "API キーのスコープが不足しています（例: read キーで書き込み系の操作を実行した）。再試行せず、必要なスコープのキーが要ることをユーザーに伝えてください。";
+      return "API キーのスコープが不足しています（read キーで書き込み系の操作を実行した、など）。再試行せず、書き込みを許可したキー（read write）が必要なことをユーザーに伝えてください。";
     case 404:
       return "対象が見つかりません。ID が正しいか、一覧系の Tool で取り直してから再実行してください。";
     case 429:

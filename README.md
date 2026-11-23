@@ -10,24 +10,28 @@ SELENE は家計簿アプリで、Web UI で取引・統計・カテゴリを閲
 
 ## ステータス: API キー認証対応版
 
-SELENE 本体側に **ユーザー単位の長寿命 API キー** 発行・認証の仕組みが入ったので、当リポジトリも JWT 直貼り運用から API キー (`SELENE_API_KEY`) 運用へ切り替えた。これ以降、残りの GET / POST 系 Tool を順次追加していく予定。
+SELENE 本体側に **ユーザー単位の長寿命 API キー** 発行・認証の仕組みが入ったので、当リポジトリも JWT 直貼り運用から API キー (`SELENE_API_KEY`) 運用へ切り替えた。読み取り 12 種と書き込み 7 種の Tool を提供している。
 
 API キーの設計仕様は SELENE 本体リポジトリの [`Document/Architecture/api-key-auth.md`](https://github.com/Riri-Inferno/ServerlessKakeibo/blob/main/Document/Architecture/api-key-auth.md) 参照。要点:
 
 - API キーは SELENE の Web UI から発行する（`slk_` で始まる長寿命トークン）
 - 送信は **JWT と同じ `Authorization: Bearer <key>`** ヘッダ。スキーム判別は接頭辞 (`slk_` / `eyJ`) で行われる
-- 初期リリースでは `read` スコープのキーのみ発行可能。書き込み系 Tool が必要になった時点で `write` スコープを別途検討
+- 発行できるのは `read`（読み取りのみ）か `read write`（書き込みも許可）の 2 種類。書き込み系 Tool を使うには `read write` のキーが必要
 
 ### 今できていること
 - TypeScript で MCP サーバを実装、stdio で MCP プロトコルを話せる
-- SELENE の **GET 12種**（取引・カテゴリ・統計・ユーザー設定）を Tool として提供（一覧は「提供している Tool」参照）
+- SELENE の **読み取り 12 種**（取引・カテゴリ・統計・ユーザー設定）と **書き込み 7 種**（取引とカテゴリの作成・更新・削除）を Tool として提供（一覧は「提供している Tool」参照）
+- 書き込み系 Tool には MCP の annotations（`destructiveHint` など）を付けている
 - API エラー時は、ステータスごとの対処方法を添えて `isError` の結果としてモデルに返す
 - Zod による入力スキーマ → JSON Schema 自動変換、LLM への引数仕様提示
 - Docker イメージ化、`docker run -i --rm -e ... selene-mcp:latest` で MCP クライアントから繋がる
 - `SELENE_API_KEY` 経由の認証（`slk_` プレフィックス未一致時は起動時に警告）
 
 ### 現状の制約
-- 書き込み系（POST/PUT/DELETE）Tool は未実装。SELENE 側で `write` スコープを発行可能にする UI が整ってから着手予定
+- レシート画像の読み取りは提供しない。クライアント側の LLM が画像を読み、`create_transaction` で登録する
+- 取引の更新は全体の置き換え。`get_transaction_detail` で取得してから、全体を `update_transaction` に渡す
+- カテゴリのリセット・並べ替え、ユーザー設定の更新、エクスポート、全データ削除は API キーでは使えない（SELENE の画面から操作する）
+- 稼働はローカルの stdio のみ。リモート化は [ServerlessKakeibo#100](https://github.com/Riri-Inferno/ServerlessKakeibo/issues/100)
 
 ## クイックスタート（Docker）
 
@@ -77,6 +81,8 @@ Claude Desktop の `claude_desktop_config.json` または Claude Code の `.mcp.
 
 ## 提供している Tool
 
+### 読み取り（`read` スコープ）
+
 | Tool 名 | 概要 | エンドポイント |
 |---|---|---|
 | `get_transaction_categories` | 取引カテゴリ一覧（マスタ+カスタム） | `GET /api/categories/transaction` |
@@ -90,7 +96,19 @@ Claude Desktop の `claude_desktop_config.json` または Claude Code の `.mcp.
 | `get_statistics_date_range` | 取引データの日付範囲 | `GET /api/Statistics/date-range` |
 | `get_item_categories` | 商品カテゴリ一覧（支出の品目用） | `GET /api/categories/item` |
 | `get_income_item_categories` | 給与項目カテゴリ一覧（収入の明細用） | `GET /api/categories/income-item` |
-| `get_user_settings` | ユーザー設定（締め日・タイムゾーン・通貨など） | `GET /api/user/settings` |
+| `get_user_settings` | ユーザー設定（締め日・タイムゾーン・通貨など）。API キーではメールアドレスとアイコン URL は返らない | `GET /api/user/settings` |
+
+### 書き込み（`read write` スコープ）
+
+| Tool 名 | 概要 | エンドポイント |
+|---|---|---|
+| `create_transaction` | 取引を登録（支出は品目が1件以上必要） | `POST /Transaction` |
+| `update_transaction` | 取引を全体置き換えで更新。合計はサーバーが品目から再計算 | `PUT /Transaction/{id}` |
+| `delete_transaction` | 取引を削除 | `DELETE /Transaction/{id}` |
+| `create_category` | カテゴリを作成（`kind`: transaction / item / income-item） | `POST /api/categories/{kind}` |
+| `update_category` | カテゴリの名前・色・表示順を更新 | `PUT /api/categories/{kind}/{id}` |
+| `delete_category` | カテゴリを非表示にする（restore で戻せる） | `DELETE /api/categories/{kind}/{id}` |
+| `restore_category` | 非表示にしたカテゴリを戻す | `POST /api/categories/{kind}/{id}/restore` |
 
 各 Tool の引数仕様は `src/tools/*.ts` の Zod スキーマ（`.describe()` 付き）を参照。
 
@@ -116,12 +134,20 @@ npx tsc --noEmit
 npm run build
 ```
 
+### バージョンの上げ方
+
+バージョンは `package.json` だけで管理し、サーバーは起動時にそこから読む。上げるときは `npm version` を使う（`package-lock.json` も一緒に更新される）。
+
+```bash
+npm version minor --no-git-tag-version   # 0.5.0 → 0.6.0
+```
+
 ### プロジェクト構成
 
 ```
 src/
 ├── index.ts             # 起動 + 各 Tool の register 呼び出し
-├── seleneClient.ts      # 共通 HTTP ヘルパ（base URL + Bearer + クエリ整形）
+├── seleneClient.ts      # 共通 HTTP ヘルパ（GET/POST/PUT/DELETE、Bearer、エラー時の対処ヒント）
 └── tools/
     ├── categories.ts
     ├── transactions.ts
@@ -130,10 +156,12 @@ src/
     ├── monthlyComparison.ts
     ├── statistics.ts
     ├── itemCategories.ts
-    └── userSettings.ts
+    ├── userSettings.ts
+    ├── transactionWrite.ts  # 取引の登録・更新・削除
+    └── categoryWrite.ts     # カテゴリの作成・更新・削除・復元
 ```
 
-各 Tool ファイルは `export function register(server: McpServer): void` を export する。新しい GET を追加する場合：
+各 Tool ファイルは `export function register(server: McpServer): void` を export する。新しい Tool を追加する場合：
 
 1. `src/tools/<新Tool>.ts` を作成し、`register(server)` を実装
 2. `src/index.ts` で import → `register(server)` を呼ぶ
