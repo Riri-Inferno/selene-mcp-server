@@ -31,7 +31,7 @@ API キーの設計仕様は SELENE 本体リポジトリの [`Document/Architec
 - レシート画像の読み取りは提供しない。クライアント側の LLM が画像を読み、`create_transaction` で登録する
 - 取引の更新は全体の置き換え。`get_transaction_detail` で取得してから、全体を `update_transaction` に渡す
 - カテゴリのリセット・並べ替え、ユーザー設定の更新、エクスポート、全データ削除は API キーでは使えない（SELENE の画面から操作する）
-- リモート（HTTP）では、API キーを `Authorization` ヘッダーで渡せるクライアント（Claude Code など）だけが使える。claude.ai やスマホのコネクタ向けの OAuth 対応は [ServerlessKakeibo#100](https://github.com/Riri-Inferno/ServerlessKakeibo/issues/100) の Phase 3b で行う
+- リモート（HTTP）では、API キーを `Authorization` ヘッダーで渡せるクライアント（Claude Code など）だけが使える。claude.ai やスマホのコネクタ向けの OAuth 対応は [ServerlessKakeibo#100](https://github.com/Riri-Inferno/ServerlessKakeibo/issues/100) で対応する予定
 
 ## クイックスタート（Docker）
 
@@ -208,5 +208,5 @@ src/
 - [Model Context Protocol 公式](https://modelcontextprotocol.io/)
 - 配布パターンの参考実装: [nulab/backlog-mcp-server](https://github.com/nulab/backlog-mcp-server)
 - SELENE 本体: [Riri-Inferno/ServerlessKakeibo](https://github.com/Riri-Inferno/ServerlessKakeibo)
-- アーキテクチャ（To-Be、リモート接続と OAuth）: [`docs/architecture.md`](docs/architecture.md)
+- k3s に常駐させる MCP サーバーのアーキテクチャ: [`docs/architecture.md`](docs/architecture.md)
 - API キー認証 設計ドキュメント: [`Document/Architecture/api-key-auth.md`](https://github.com/Riri-Inferno/ServerlessKakeibo/blob/main/Document/Architecture/api-key-auth.md)

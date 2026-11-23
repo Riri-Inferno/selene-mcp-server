@@ -1,9 +1,11 @@
-# アーキテクチャ（To-Be）
+# k3s に常駐させる MCP サーバーのアーキテクチャ
 
-Issue Riri-Inferno/ServerlessKakeibo#100 で目指す構成。スマホやデスクトップの Claude アプリから、ローカルに何も入れずに SELENE の取引を読み書きできるようにする。
+selene-mcp-server を自宅の k3s（raspi5）に Pod として常駐させ、Streamable HTTP で公開する構成。スマホやデスクトップの Claude アプリから、ローカルに何も入れずに SELENE の取引を読み書きできるようにする（Riri-Inferno/ServerlessKakeibo#100）。
 
-- **Phase 3a**：MCP サーバーを k3s の Pod として動かし、Streamable HTTP で公開する。認証は、`Authorization` ヘッダーで渡す API キー
-- **Phase 3b**（予定）：OAuth に対応する。ユーザーは SELENE の既存のログイン（Google / GitHub）で承認するだけでよく、API キーを手で発行して貼る必要がなくなる
+接続の方法は 2 つ。
+
+- **API キーで接続**：SELENE の画面で発行した API キーを、`Authorization` ヘッダーで渡す。Claude Code など、ヘッダーを設定できるクライアント向け
+- **OAuth で接続**（予定）：ユーザーは SELENE の既存のログイン（Google / GitHub）で承認するだけでよく、API キーを手で発行して貼る必要がない。Claude アプリのカスタムコネクタ向け
 
 特定のモデルやクライアントに縛られないように、MCP の標準（Streamable HTTP と MCP Authorization）に沿って作る。
 
@@ -29,8 +31,8 @@ flowchart LR
     DB[("PostgreSQL")]
   end
 
-  CA -- "HTTPS + OAuth トークン（3b）" --> DNS
-  CC -- "HTTPS + Bearer slk_...（3a）" --> DNS
+  CA -- "HTTPS + OAuth トークン（予定）" --> DNS
+  CC -- "HTTPS + Bearer slk_..." --> DNS
   DNS --> Tunnel --> CFD
   CFD -- "Host: mcp-kakeibo.riri-inferno.com" --> MCP
   MCP -- "クラスタ内の通信<br/>Bearer slk_... をそのまま転送" --> BE
@@ -41,11 +43,11 @@ flowchart LR
 
 ポイント:
 
-- **MCP サーバーは秘密情報を持たない**。受け取った API キー（3b では、OAuth のトークンとして発行された API キー）を backend に転送するだけで、認証と認可（`read` / `read write` スコープ）は SELENE 本体が判断する
+- **MCP サーバーは秘密情報を持たない**。受け取った API キー（OAuth で接続する場合は、トークンとして発行された API キー）を backend に転送するだけで、認証と認可（`read` / `read write` スコープ）は SELENE 本体が判断する
 - **ステートレス**。セッションを持たず、`POST /mcp` のたびに McpServer を作って捨てる。Pod を再起動しても、台数を増やしても、クライアント側には影響がない
 - **stdio も残す**。`MCP_TRANSPORT` の既定は stdio なので、ローカルで子プロセスとして起動する従来の使い方はそのまま動く
 
-## Phase 3a：API キーをヘッダーで渡す
+## API キーで接続する
 
 ```mermaid
 sequenceDiagram
@@ -75,11 +77,11 @@ sequenceDiagram
   M->>M: 応答後に McpServer と Transport を破棄
 ```
 
-## Phase 3b：OAuth で接続する（予定）
+## OAuth で接続する（予定）
 
 MCP の TypeScript SDK が提供する認可サーバーの部品を使い、ログインと承認には SELENE の既存の Google / GitHub ログインを使う。ユーザーが承認したら、SELENE が裏で `read write` の API キーを発行し、それを OAuth のアクセストークンとして返す。
 
-トークンの実体が API キーなので、MCP サーバーから backend への転送（3a の仕組み）は変わらない。
+トークンの実体が API キーなので、MCP サーバーから backend への転送は、API キーで接続する場合と変わらない。
 
 ```mermaid
 sequenceDiagram
@@ -110,14 +112,14 @@ sequenceDiagram
   C->>M: POST /token（code + code_verifier）
   M-->>C: access_token = slk_...
 
-  Note over C,B: 以降は Phase 3a と同じ流れ
+  Note over C,B: 以降は API キーで接続する場合と同じ流れ
   C->>M: POST /mcp<br/>Authorization: Bearer slk_...
   M->>B: Bearer slk_... を転送
   B-->>M: 結果
   M-->>C: Tool の結果
 ```
 
-未決事項（3b に入る前に調べる）:
+未決事項（OAuth の実装に入る前に調べる）:
 
 - Claude のカスタムコネクタが求める要件。Dynamic Client Registration は必須か、リフレッシュトークンは必要か
 - 認可コードと API キーを、MCP サーバーと backend のどちらが、どう対応付けて保持するか（MCP サーバーをステートレスに保てるか）
