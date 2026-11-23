@@ -31,7 +31,7 @@ API キーの設計仕様は SELENE 本体リポジトリの [`Document/Architec
 - レシート画像の読み取りは提供しない。クライアント側の LLM が画像を読み、`create_transaction` で登録する
 - 取引の更新は全体の置き換え。`get_transaction_detail` で取得してから、全体を `update_transaction` に渡す
 - カテゴリのリセット・並べ替え、ユーザー設定の更新、エクスポート、全データ削除は API キーでは使えない（SELENE の画面から操作する）
-- 稼働はローカルの stdio のみ。リモート化は [ServerlessKakeibo#100](https://github.com/Riri-Inferno/ServerlessKakeibo/issues/100)
+- リモート（HTTP）では、API キーを `Authorization` ヘッダーで渡せるクライアント（Claude Code など）だけが使える。claude.ai やスマホのコネクタ向けの OAuth 対応は [ServerlessKakeibo#100](https://github.com/Riri-Inferno/ServerlessKakeibo/issues/100) で対応する予定
 
 ## クイックスタート（Docker）
 
@@ -46,7 +46,23 @@ docker run -i --rm \
   selene-mcp:latest
 ```
 
-## MCP クライアントへの登録
+## リモートで使う（Streamable HTTP）
+
+`MCP_TRANSPORT=http` で起動すると、`POST /mcp` で MCP を待ち受ける（ステートレス）。SELENE の k3s では `https://mcp-kakeibo.riri-inferno.com/mcp` で公開している。
+
+- 認証は SELENE 本体に任せる。リクエストの `Authorization: Bearer slk_...` を、そのまま SELENE API に転送する（サーバーは API キーを保存しない）
+- ヘッダーがない、または `slk_` で始まらない場合は 401
+- `MCP_ALLOWED_HOSTS` 以外の Host ヘッダーは 403（DNS rebinding 対策）
+- `GET /healthz` は死活監視用（認証なし）
+
+Claude Code への登録（端末に Node やビルド済みのコードは不要）:
+
+```bash
+claude mcp add --transport http selene https://mcp-kakeibo.riri-inferno.com/mcp \
+  --header "Authorization: Bearer slk_..."
+```
+
+## MCP クライアントへの登録（ローカル・stdio）
 
 Claude Desktop の `claude_desktop_config.json` または Claude Code の `.mcp.json` / `settings.json` の `mcpServers` に：
 
@@ -74,8 +90,13 @@ Claude Desktop の `claude_desktop_config.json` または Claude Code の `.mcp.
 
 | 名前 | 必須 | 既定値 | 説明 |
 |---|---|---|---|
-| `SELENE_API_KEY` | ✅ | — | SELENE で発行された API キー。`slk_` で始まる文字列。`Bearer ` プレフィックスは付いていてもなくても良い（内部で剥がす） |
-| `SELENE_API_BASE_URL` | — | `https://api-kakeibo.riri-inferno.com` | API ホスト。ローカル開発時は `http://localhost:8080` 等 |
+| `SELENE_API_KEY` | stdio のみ | — | SELENE で発行された API キー。`slk_` で始まる文字列。`Bearer ` プレフィックスは付いていてもなくても良い（内部で剥がす） |
+| `SELENE_API_BASE_URL` | — | `https://api-kakeibo.riri-inferno.com` | API ホスト。ローカル開発時は `http://localhost:8080`、k3s ではクラスタ内の Service の URL |
+| `MCP_TRANSPORT` | — | `stdio` | `stdio` または `http` |
+| `PORT` | — | `3000` | HTTP モードの待ち受けポート |
+| `MCP_ALLOWED_HOSTS` | — | （検証しない） | HTTP モードで許可する Host ヘッダー（カンマ区切り）。公開時は必ず指定する |
+
+`SELENE_API_KEY` が必須なのは stdio モードだけ。HTTP モードではリクエストのヘッダーのキーを使う。
 
 > ⚠️ API キーは発行時の 1 回のみ平文で表示され、以降は再表示できない（SELENE 側で PBKDF2 ハッシュ保存）。漏洩した場合は SELENE の UI から個別失効してから再発行する。
 
@@ -142,11 +163,19 @@ npm run build
 npm version minor --no-git-tag-version   # 0.5.0 → 0.6.0
 ```
 
+### リリース
+
+develop を main にマージしてから、**Target を main にして** GitHub Release（例: `v0.6.0`）を公開する。公開すると `.github/workflows/release.yml` が arm64 のイメージを build して、`ghcr.io/riri-inferno/selene-mcp-server` に `:latest` と `:<タグ>` で push する。k3s 上の keel が `:latest` の更新を検知して、Pod を入れ替える。
+
+Target が main 以外の Release では build しない。
+
 ### プロジェクト構成
 
 ```
 src/
-├── index.ts             # 起動 + 各 Tool の register 呼び出し
+├── index.ts             # 起動（MCP_TRANSPORT で stdio / http を切り替え）
+├── server.ts            # McpServer の生成と各 Tool の register 呼び出し
+├── http.ts              # Streamable HTTP（ステートレス、API キーの転送）
 ├── seleneClient.ts      # 共通 HTTP ヘルパ（GET/POST/PUT/DELETE、Bearer、エラー時の対処ヒント）
 └── tools/
     ├── categories.ts
@@ -164,7 +193,7 @@ src/
 各 Tool ファイルは `export function register(server: McpServer): void` を export する。新しい Tool を追加する場合：
 
 1. `src/tools/<新Tool>.ts` を作成し、`register(server)` を実装
-2. `src/index.ts` で import → `register(server)` を呼ぶ
+2. `src/server.ts` で import → `register(server)` を呼ぶ
 3. `npm run dev` → Inspector で `tools/list` に出ること、`tools/call` でデータが返ることを確認
 
 ## 技術スタック
@@ -179,4 +208,5 @@ src/
 - [Model Context Protocol 公式](https://modelcontextprotocol.io/)
 - 配布パターンの参考実装: [nulab/backlog-mcp-server](https://github.com/nulab/backlog-mcp-server)
 - SELENE 本体: [Riri-Inferno/ServerlessKakeibo](https://github.com/Riri-Inferno/ServerlessKakeibo)
+- k3s に常駐させる MCP サーバーのアーキテクチャ: [`docs/architecture.md`](docs/architecture.md)
 - API キー認証 設計ドキュメント: [`Document/Architecture/api-key-auth.md`](https://github.com/Riri-Inferno/ServerlessKakeibo/blob/main/Document/Architecture/api-key-auth.md)

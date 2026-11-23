@@ -1,43 +1,26 @@
-import { createRequire } from "node:module";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { getBaseUrl } from "./seleneClient.js";
-import * as categories from "./tools/categories.js";
-import * as transactions from "./tools/transactions.js";
-import * as monthlySummary from "./tools/monthlySummary.js";
-import * as monthlyComparison from "./tools/monthlyComparison.js";
-import * as transactionDetail from "./tools/transactionDetail.js";
-import * as statistics from "./tools/statistics.js";
-import * as itemCategories from "./tools/itemCategories.js";
-import * as userSettings from "./tools/userSettings.js";
-import * as transactionWrite from "./tools/transactionWrite.js";
-import * as categoryWrite from "./tools/categoryWrite.js";
+import { startHttpServer } from "./http.js";
+import { getBaseUrl, warnIfEnvApiKeyInvalid } from "./seleneClient.js";
+import { createServer, version } from "./server.js";
 
-// バージョンは package.json を唯一の正とする（npm version で上げる）。
-// src/ と dist/ のどちらから実行しても ../package.json を指す。
-const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
-
-const server = new McpServer({
-  name: "selene-mcp-server",
-  version,
-});
-
-categories.register(server);
-transactions.register(server);
-monthlySummary.register(server);
-monthlyComparison.register(server);
-transactionDetail.register(server);
-statistics.register(server);
-itemCategories.register(server);
-userSettings.register(server);
-
-// 書き込み系（read write スコープのキーが必要）
-transactionWrite.register(server);
-categoryWrite.register(server);
-
+/**
+ * MCP_TRANSPORT で起動方式を切り替える。
+ * - stdio（既定）: クライアントが子プロセスとして起動する。API キーは環境変数 SELENE_API_KEY
+ * - http: Streamable HTTP で待ち受ける（k3s の Pod など）。API キーはリクエストの Authorization ヘッダー
+ */
 async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  const mode = (process.env.MCP_TRANSPORT ?? "stdio").toLowerCase();
+
+  if (mode === "http") {
+    startHttpServer();
+    return;
+  }
+  if (mode !== "stdio") {
+    throw new Error(`MCP_TRANSPORT は stdio か http を指定してください（指定値: ${mode}）`);
+  }
+
+  warnIfEnvApiKeyInvalid();
+  await createServer().connect(new StdioServerTransport());
   console.error(`[selene-mcp] v${version} ready on stdio (base=${getBaseUrl()})`);
 }
 

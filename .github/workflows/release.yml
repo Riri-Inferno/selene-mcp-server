@@ -1,0 +1,69 @@
+name: Release & Push to GHCR
+
+# GitHub Release を publish したときに発火し、GHCR に image を push する。
+# raspi5 (arm64) 上の k3s が :latest を pull し、keel が digest の変化を検知して rollout する。
+# リリースは main から行う（Release の Target は main）。main 以外を Target にした Release では build しない。
+# 手動実行（workflow_dispatch）にも対応。version 入力でタグを指定可能。
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '手動実行時の image タグ（例: v0.6.0 / test-20261123）。未指定なら github.sha を使用。'
+        required: false
+        default: ''
+
+jobs:
+  build-and-push:
+    name: Build & Push to GHCR
+    # raspi5 (arm64) でしか動かさないため、ネイティブ arm64 ランナーで arm64 のみ build
+    runs-on: ubuntu-22.04-arm
+    # Release は main を Target にしたものだけ。手動実行は実行時に選んだブランチで build する
+    if: github.event_name != 'release' || github.event.release.target_commitish == 'main'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lowercase repo name
+        id: repo
+        run: echo "name=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+
+      - name: Determine image tag
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          elif [ -n "${{ inputs.version }}" ]; then
+            TAG="${{ inputs.version }}"
+          else
+            TAG="${GITHUB_SHA::7}"
+          fi
+          echo "version=${TAG}" >> $GITHUB_OUTPUT
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and Push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ steps.repo.outputs.name }}:latest
+            ghcr.io/${{ steps.repo.outputs.name }}:${{ steps.version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: echo "Pushed ghcr.io/${{ steps.repo.outputs.name }}:${{ steps.version.outputs.version }} (linux/arm64)"

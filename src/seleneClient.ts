@@ -1,19 +1,39 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 const SELENE_API_BASE_URL =
   process.env.SELENE_API_BASE_URL ?? "https://api-kakeibo.riri-inferno.com";
 
-const SELENE_API_KEY = process.env.SELENE_API_KEY
+/** stdio モードで使う API キー（環境変数） */
+const ENV_API_KEY = process.env.SELENE_API_KEY
   ?.replace(/^Bearer\s+/i, "")
   .trim();
 
-if (!SELENE_API_KEY) {
-  console.error(
-    "[selene-mcp] WARNING: SELENE_API_KEY is not set. All tool calls will fail with 401."
-  );
-} else if (!SELENE_API_KEY.startsWith("slk_")) {
-  console.error(
-    "[selene-mcp] WARNING: SELENE_API_KEY does not start with 'slk_'. " +
-      "SELENE issues API keys with the 'slk_' prefix; you may have pasted a JWT or an invalid value."
-  );
+/**
+ * HTTP モードで、リクエストごとの API キーを Tool の処理まで運ぶ。
+ * 複数ユーザーのリクエストが同時に来ても混ざらないよう、グローバル変数ではなく AsyncLocalStorage を使う。
+ */
+const requestContext = new AsyncLocalStorage<{ apiKey: string }>();
+
+export function runWithApiKey<T>(apiKey: string, fn: () => T): T {
+  return requestContext.run({ apiKey }, fn);
+}
+
+/** HTTP モードならリクエストのキー、stdio モードなら環境変数のキー */
+function getApiKey(): string | undefined {
+  return requestContext.getStore()?.apiKey ?? ENV_API_KEY;
+}
+
+export function warnIfEnvApiKeyInvalid(): void {
+  if (!ENV_API_KEY) {
+    console.error(
+      "[selene-mcp] WARNING: SELENE_API_KEY is not set. All tool calls will fail with 401."
+    );
+  } else if (!ENV_API_KEY.startsWith("slk_")) {
+    console.error(
+      "[selene-mcp] WARNING: SELENE_API_KEY does not start with 'slk_'. " +
+        "SELENE issues API keys with the 'slk_' prefix; you may have pasted a JWT or an invalid value."
+    );
+  }
 }
 
 export function getBaseUrl(): string {
@@ -39,7 +59,7 @@ async function seleneRequest(
   const target = `${method} ${url.pathname}${url.search}`;
 
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${SELENE_API_KEY ?? ""}`,
+    Authorization: `Bearer ${getApiKey() ?? ""}`,
     Accept: "application/json",
   };
   if (options.body !== undefined) {
@@ -98,7 +118,7 @@ function hintForStatus(status: number): string {
     case 400:
       return "リクエストの引数が不正です。本文のエラー内容を見て引数を直してから再実行してください。";
     case 401:
-      return SELENE_API_KEY
+      return getApiKey()
         ? "API キーが認証されませんでした。本文の message に理由があります。キーが無効なら SELENE の設定画面でキーの状態を確認するよう、API キーでは利用できない操作なら SELENE の画面から操作するよう、ユーザーに伝えてください。引数を変えて再試行しても解決しません。"
         : "SELENE_API_KEY が設定されていません。ユーザーに API キーの設定を依頼してください。";
     case 403:
