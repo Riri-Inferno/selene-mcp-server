@@ -19,4 +19,10 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=build /app/dist ./dist
 
+# root で動かさない（node:alpine に用意されている node ユーザー）
+USER node
+
+# 既定は stdio（docker run -i で MCP クライアントから起動する使い方）。
+# k3s などで HTTP として動かす場合は MCP_TRANSPORT=http を指定する（PORT の既定は 3000）。
+EXPOSE 3000
 CMD ["node", "dist/index.js"]
