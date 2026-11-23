@@ -2,6 +2,7 @@ name: Release & Push to GHCR
 
 # GitHub Release を publish したときに発火し、GHCR に image を push する。
 # raspi5 (arm64) 上の k3s が :latest を pull し、keel が digest の変化を検知して rollout する。
+# リリースは main から行う（Release の Target は main）。main 以外を Target にした Release では build しない。
 # 手動実行（workflow_dispatch）にも対応。version 入力でタグを指定可能。
 
 on:
@@ -19,6 +20,8 @@ jobs:
     name: Build & Push to GHCR
     # raspi5 (arm64) でしか動かさないため、ネイティブ arm64 ランナーで arm64 のみ build
     runs-on: ubuntu-22.04-arm
+    # Release は main を Target にしたものだけ。手動実行は実行時に選んだブランチで build する
+    if: github.event_name != 'release' || github.event.release.target_commitish == 'main'
     permissions:
       contents: read
       packages: write

@@ -163,6 +163,12 @@ npm run build
 npm version minor --no-git-tag-version   # 0.5.0 → 0.6.0
 ```
 
+### リリース
+
+develop を main にマージしてから、**Target を main にして** GitHub Release（例: `v0.6.0`）を公開する。公開すると `.github/workflows/release.yml` が arm64 のイメージを build して、`ghcr.io/riri-inferno/selene-mcp-server` に `:latest` と `:<タグ>` で push する。k3s 上の keel が `:latest` の更新を検知して、Pod を入れ替える。
+
+Target が main 以外の Release では build しない。
+
 ### プロジェクト構成
 
 ```
@@ -202,4 +208,5 @@ src/
 - [Model Context Protocol 公式](https://modelcontextprotocol.io/)
 - 配布パターンの参考実装: [nulab/backlog-mcp-server](https://github.com/nulab/backlog-mcp-server)
 - SELENE 本体: [Riri-Inferno/ServerlessKakeibo](https://github.com/Riri-Inferno/ServerlessKakeibo)
+- アーキテクチャ（To-Be、リモート接続と OAuth）: [`docs/architecture.md`](docs/architecture.md)
 - API キー認証 設計ドキュメント: [`Document/Architecture/api-key-auth.md`](https://github.com/Riri-Inferno/ServerlessKakeibo/blob/main/Document/Architecture/api-key-auth.md)
