@@ -5,7 +5,7 @@ selene-mcp-server を自宅の k3s（raspi5）に Pod として常駐させ、St
 接続の方法は 2 つ。
 
 - **API キーで接続**：SELENE の画面で発行した API キーを、`Authorization` ヘッダーで渡す。Claude Code など、ヘッダーを設定できるクライアント向け
-- **OAuth で接続**（予定）：ユーザーは SELENE の既存のログイン（Google / GitHub）で承認するだけでよく、API キーを手で発行して貼る必要がない。Claude アプリのカスタムコネクタ向け
+- **OAuth で接続**：ユーザーは SELENE の既存のログイン（Google / GitHub）で承認するだけでよく、API キーを手で発行して貼る必要がない。Claude アプリのカスタムコネクタ向け
 
 特定のモデルやクライアントに縛られないように、MCP の標準（Streamable HTTP と MCP Authorization）に沿って作る。
 
@@ -31,7 +31,7 @@ flowchart LR
     DB[("PostgreSQL")]
   end
 
-  CA -- "HTTPS + OAuth トークン（予定）" --> DNS
+  CA -- "HTTPS + OAuth トークン" --> DNS
   CC -- "HTTPS + Bearer slk_..." --> DNS
   DNS --> Tunnel --> CFD
   CFD -- "Host: mcp-kakeibo.riri-inferno.com" --> MCP
@@ -43,7 +43,7 @@ flowchart LR
 
 ポイント:
 
-- **MCP サーバーは秘密情報を持たない**。受け取った API キー（OAuth で接続する場合は、トークンとして発行された API キー）を backend に転送するだけで、認証と認可（`read` / `read write` スコープ）は SELENE 本体が判断する
+- **MCP サーバーは秘密情報を持たない**。受け取った API キーを backend に転送するだけで、認証と認可（`read` / `read write` スコープ）は SELENE 本体が判断する
 - **ステートレス**。セッションを持たず、`POST /mcp` のたびに McpServer を作って捨てる。Pod を再起動しても、台数を増やしても、クライアント側には影響がない
 - **stdio も残す**。`MCP_TRANSPORT` の既定は stdio なので、ローカルで子プロセスとして起動する従来の使い方はそのまま動く
 
@@ -77,54 +77,59 @@ sequenceDiagram
   M->>M: 応答後に McpServer と Transport を破棄
 ```
 
-## OAuth で接続する（予定）
+## OAuth で接続する
 
-MCP の TypeScript SDK が提供する認可サーバーの部品を使い、ログインと承認には SELENE の既存の Google / GitHub ログインを使う。ユーザーが承認したら、SELENE が裏で `read write` の API キーを発行し、それを OAuth のアクセストークンとして返す。
+Claude アプリのカスタムコネクタから、ユーザーごとに自分の SELENE アカウントで接続できるようにする。SELENE の backend を OAuth の認可サーバーにし、MCP サーバーはリソースサーバーになる。
 
-トークンの実体が API キーなので、MCP サーバーから backend への転送は、API キーで接続する場合と変わらない。
+システム全体の設計（全体の流れ、方式を選んだ理由、満たす仕様）は SELENE 本体にまとめている。
+
+- [mcp-oauth-design.md](https://github.com/Riri-Inferno/ServerlessKakeibo/blob/develop/Document/Architecture/mcp-oauth-design.md)：全体の設計
+- [oauth-authorization-server.md](https://github.com/Riri-Inferno/ServerlessKakeibo/blob/develop/Document/Architecture/oauth-authorization-server.md)：backend の認可サーバーの実装
+
+ここでは、MCP サーバーが受け持つことだけを書く（ServerlessKakeibo#109）。
+
+`MCP_RESOURCE_URL` と `MCP_AUTHORIZATION_SERVER` を設定したときだけ有効になる（`src/oauth.ts`）。設定しなければ、API キーでの接続だけを受け付ける（今までどおり）。
+
+### MCP サーバーの役割
+
+- **Protected Resource Metadata（RFC 9728）を返す**：`/.well-known/oauth-protected-resource`（`/mcp` 付きのパスでも）で、次の内容を返す
+  - `resource`：`https://mcp-kakeibo.riri-inferno.com/mcp`。backend の設定（`OAuth:McpResource`）と**文字列として完全に一致**させる。backend は resource を完全一致で照合するため
+  - `authorization_servers`：backend の issuer（`https://api-kakeibo.riri-inferno.com/`）。Claude は先頭の 1 件だけを使う
+  - `scopes_supported`：`read`、`write`
+- **トークンがないときは 401 を返す**：`WWW-Authenticate: Bearer resource_metadata="..."` を付ける（`scope` も付ける）。Claude はこれを見て OAuth の接続を始める
+- **トークンの種類で振り分ける**
+  - `slk_` で始まる：API キー。今までどおり backend にそのまま転送する
+  - それ以外：OAuth のアクセストークン。backend でトークン交換（RFC 8693）をして、backend 宛ての短命なトークンで API を呼ぶ（交換は ServerlessKakeibo#108）。受け取ったトークンをそのまま転送することは、MCP の仕様で禁止されている（MUST NOT）
+  - 交換に失敗したら 401、スコープが足りなければ 403 と `error="insufficient_scope"`
+- **状態も秘密情報も持たない**：トークンの検証は交換のときに backend が行う。MCP サーバーはトークンの中身を読まず、鍵も持たない
 
 ```mermaid
 sequenceDiagram
   autonumber
-  actor U as ユーザー
-  participant C as Claude アプリ<br/>（カスタムコネクタ）
-  participant M as kakeibo-mcp<br/>（MCP サーバー兼 認可サーバー）
-  participant F as SELENE 画面
+  participant C as MCP クライアント
+  participant M as kakeibo-mcp
   participant B as kakeibo-backend
-  participant IdP as Google / GitHub
 
-  C->>M: POST /mcp（トークンなし）
-  M-->>C: 401<br/>WWW-Authenticate: Bearer resource_metadata=...
-  C->>M: GET /.well-known/oauth-protected-resource
-  C->>M: GET /.well-known/oauth-authorization-server
-  C->>M: POST /register（Dynamic Client Registration）
-  C->>U: ブラウザで認可画面を開く
-  U->>M: GET /authorize（PKCE の code_challenge 付き）
-  M->>F: SELENE のログインと承認画面へリダイレクト
-  U->>F: Google / GitHub でログイン
-  F->>IdP: OAuth / OIDC
-  IdP-->>F: ログイン完了
-  U->>F: 「Claude に家計簿の読み書きを許可」を承認
-  F->>B: 承認（JWT で認証）
-  B->>B: read write の API キーを発行
-  B-->>M: 認可コードとキーを対応付ける
-  M-->>C: redirect_uri に認可コードを返す
-  C->>M: POST /token（code + code_verifier）
-  M-->>C: access_token = slk_...
-
-  Note over C,B: 以降は API キーで接続する場合と同じ流れ
-  C->>M: POST /mcp<br/>Authorization: Bearer slk_...
-  M->>B: Bearer slk_... を転送
-  B-->>M: 結果
-  M-->>C: Tool の結果
+  C->>M: POST /mcp（Authorization: Bearer ...）
+  alt トークンなし
+    M-->>C: 401<br/>WWW-Authenticate: Bearer resource_metadata="..."
+  else slk_ で始まる（API キー）
+    M->>B: API を呼ぶ（Bearer slk_... をそのまま）
+    B-->>M: 結果
+    M-->>C: Tool の結果
+  else それ以外（OAuth のアクセストークン）
+    M->>B: トークン交換（RFC 8693）
+    alt 交換できた
+      B-->>M: backend 宛ての短命なトークン
+      M->>B: API を呼ぶ（交換したトークン）
+      B-->>M: 結果
+      M-->>C: Tool の結果
+    else 失効・期限切れ・宛先違い
+      B-->>M: エラー
+      M-->>C: 401（Claude がリフレッシュして再試行する）
+    end
+  end
 ```
-
-未決事項（OAuth の実装に入る前に調べる）:
-
-- Claude のカスタムコネクタが求める要件。Dynamic Client Registration は必須か、リフレッシュトークンは必要か
-- 認可コードと API キーを、MCP サーバーと backend のどちらが、どう対応付けて保持するか（MCP サーバーをステートレスに保てるか）
-- 発行したキーを、SELENE の画面から「Claude 用」とわかる形で一覧・失効できるようにする
-- Cloudflare の Bot Fight Mode が、claude.ai からの接続を止めないか
 
 ## デプロイ
 
