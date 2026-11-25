@@ -79,7 +79,55 @@ sequenceDiagram
 
 ## OAuth で接続する（未実装）
 
-Claude アプリのカスタムコネクタから、ユーザーごとに自分の SELENE アカウントで接続できるようにする。SELENE の backend を認可サーバーにし、MCP サーバーは受け取ったトークンを backend 宛ての短命なトークンに交換して API を呼ぶ。設計の選択肢、決定の理由、満たす必要がある仕様は [oauth-design.md](oauth-design.md) にまとめた。
+Claude アプリのカスタムコネクタから、ユーザーごとに自分の SELENE アカウントで接続できるようにする。SELENE の backend を OAuth の認可サーバーにし、MCP サーバーはリソースサーバーになる。
+
+システム全体の設計（全体の流れ、方式を選んだ理由、満たす仕様）は SELENE 本体にまとめている。
+
+- [mcp-oauth-design.md](https://github.com/Riri-Inferno/ServerlessKakeibo/blob/develop/Document/Architecture/mcp-oauth-design.md)：全体の設計
+- [oauth-authorization-server.md](https://github.com/Riri-Inferno/ServerlessKakeibo/blob/develop/Document/Architecture/oauth-authorization-server.md)：backend の認可サーバーの実装
+
+ここでは、MCP サーバーが受け持つことだけを書く（ServerlessKakeibo#109）。
+
+### MCP サーバーの役割
+
+- **Protected Resource Metadata（RFC 9728）を返す**：`/.well-known/oauth-protected-resource`（`/mcp` 付きのパスでも）で、次の内容を返す
+  - `resource`：`https://mcp-kakeibo.riri-inferno.com/mcp`。backend の設定（`OAuth:McpResource`）と**文字列として完全に一致**させる。backend は resource を完全一致で照合するため
+  - `authorization_servers`：backend の issuer（`https://api-kakeibo.riri-inferno.com/`）。Claude は先頭の 1 件だけを使う
+  - `scopes_supported`：`read`、`write`
+- **トークンがないときは 401 を返す**：`WWW-Authenticate: Bearer resource_metadata="..."` を付ける（`scope` も付ける）。Claude はこれを見て OAuth の接続を始める
+- **トークンの種類で振り分ける**
+  - `slk_` で始まる：API キー。今までどおり backend にそのまま転送する
+  - それ以外：OAuth のアクセストークン。backend でトークン交換（RFC 8693）をして、backend 宛ての短命なトークンで API を呼ぶ（交換は ServerlessKakeibo#108）。受け取ったトークンをそのまま転送することは、MCP の仕様で禁止されている（MUST NOT）
+  - 交換に失敗したら 401、スコープが足りなければ 403 と `error="insufficient_scope"`
+- **状態も秘密情報も持たない**：トークンの検証は交換のときに backend が行う。MCP サーバーはトークンの中身を読まず、鍵も持たない
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant C as MCP クライアント
+  participant M as kakeibo-mcp
+  participant B as kakeibo-backend
+
+  C->>M: POST /mcp（Authorization: Bearer ...）
+  alt トークンなし
+    M-->>C: 401<br/>WWW-Authenticate: Bearer resource_metadata="..."
+  else slk_ で始まる（API キー）
+    M->>B: API を呼ぶ（Bearer slk_... をそのまま）
+    B-->>M: 結果
+    M-->>C: Tool の結果
+  else それ以外（OAuth のアクセストークン）
+    M->>B: トークン交換（RFC 8693）
+    alt 交換できた
+      B-->>M: backend 宛ての短命なトークン
+      M->>B: API を呼ぶ（交換したトークン）
+      B-->>M: 結果
+      M-->>C: Tool の結果
+    else 失効・期限切れ・宛先違い
+      B-->>M: エラー
+      M-->>C: 401（Claude がリフレッシュして再試行する）
+    end
+  end
+```
 
 ## デプロイ
 
