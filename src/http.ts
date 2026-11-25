@@ -1,7 +1,15 @@
 import express, { type Request, type Response } from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { hostHeaderValidation } from "@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js";
-import { getBaseUrl, runWithApiKey } from "./seleneClient.js";
+import {
+  exchangeToken,
+  loadOAuthConfig,
+  type OAuthConfig,
+  PROTECTED_RESOURCE_METADATA_PATH,
+  protectedResourceMetadata,
+  wwwAuthenticate,
+} from "./oauth.js";
+import { type Credential, getBaseUrl, runWithCredential } from "./seleneClient.js";
 import { createServer, version } from "./server.js";
 
 const API_KEY_PREFIX = "slk_";
@@ -11,8 +19,9 @@ const API_KEY_PREFIX = "slk_";
  *
  * - セッションは持たない。POST /mcp のたびに McpServer と Transport を作り、応答したら捨てる
  *   （Pod を再起動しても、複数台に増やしても、クライアント側で何も起きない）
- * - 認証は SELENE 本体に任せる。Authorization ヘッダーの API キーを、そのまま backend に転送する
- *   （この Pod は秘密情報を持たない）
+ * - 認証は SELENE 本体に任せる（この Pod は秘密情報を持たない）
+ *   - API キー（slk_...）は、そのまま backend に転送する
+ *   - OAuth のアクセストークンは、backend で交換してから使う（MCP_RESOURCE_URL と MCP_AUTHORIZATION_SERVER を設定したとき）
  */
 export function startHttpServer(): void {
   const port = Number(process.env.PORT ?? 3000);
@@ -20,12 +29,22 @@ export function startHttpServer(): void {
     .map((h) => h.trim())
     .filter(Boolean);
 
+  const oauth = loadOAuthConfig();
+
   const app = express();
 
   // k8s の probe 用。Host ヘッダーは Pod の IP になるので、Host の検証より前に置く
   app.get("/healthz", (_req, res) => {
     res.json({ status: "ok", version });
   });
+
+  // OAuth の Protected Resource Metadata（RFC 9728）。クライアントはここから認可サーバーを知る。
+  // 公開情報なので Host の検証はしない。パス付き（/mcp）とルートの両方で返す
+  if (oauth) {
+    app.get([PROTECTED_RESOURCE_METADATA_PATH, `${PROTECTED_RESOURCE_METADATA_PATH}/*path`], (_req, res) => {
+      res.json(protectedResourceMetadata(oauth));
+    });
+  }
 
   const mcp = express.Router();
   // DNS rebinding 対策: 公開しているホスト名以外の Host ヘッダーを拒否する
@@ -37,12 +56,19 @@ export function startHttpServer(): void {
   mcp.use(express.json({ limit: "1mb" }));
 
   mcp.post("/", async (req: Request, res: Response) => {
-    const apiKey = extractApiKey(req);
-    if (!apiKey) {
+    const credential = await resolveCredential(req, oauth);
+    if (!credential) {
       res
         .status(401)
-        .set("WWW-Authenticate", 'Bearer realm="selene-mcp"')
-        .json(jsonRpcError(-32001, "Authorization: Bearer slk_... ヘッダーで SELENE の API キーを指定してください"));
+        .set("WWW-Authenticate", wwwAuthenticate(oauth, extractBearer(req) ? "invalid_token" : undefined))
+        .json(
+          jsonRpcError(
+            -32001,
+            oauth
+              ? "SELENE への接続が必要です（OAuth で接続するか、Authorization: Bearer slk_... で API キーを指定してください）"
+              : "Authorization: Bearer slk_... ヘッダーで SELENE の API キーを指定してください"
+          )
+        );
       return;
     }
 
@@ -58,8 +84,8 @@ export function startHttpServer(): void {
 
     try {
       await server.connect(transport);
-      // Tool の処理（seleneClient）まで、このリクエストの API キーを運ぶ
-      await runWithApiKey(apiKey, () => transport.handleRequest(req, res, req.body));
+      // Tool の処理（seleneClient）まで、このリクエストの認証情報を運ぶ
+      await runWithCredential(credential, () => transport.handleRequest(req, res, req.body));
     } catch (err) {
       console.error("[selene-mcp] request failed:", err);
       if (!res.headersSent) {
@@ -77,16 +103,35 @@ export function startHttpServer(): void {
 
   app.listen(port, "0.0.0.0", () => {
     console.error(
-      `[selene-mcp] v${version} ready on http://0.0.0.0:${port}/mcp (base=${getBaseUrl()}, allowedHosts=${allowedHosts?.join(",") ?? "*"})`
+      `[selene-mcp] v${version} ready on http://0.0.0.0:${port}/mcp (base=${getBaseUrl()}, allowedHosts=${allowedHosts?.join(",") ?? "*"}, oauth=${oauth ? oauth.resource : "off"})`
     );
   });
 }
 
-/** Authorization: Bearer slk_... から API キーを取り出す。形式が違えば undefined */
-function extractApiKey(req: Request): string | undefined {
-  const match = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization ?? "");
-  const token = match?.[1];
-  return token?.startsWith(API_KEY_PREFIX) ? token : undefined;
+/** Authorization: Bearer ... からトークンを取り出す */
+function extractBearer(req: Request): string | undefined {
+  return /^Bearer\s+(\S+)$/i.exec(req.headers.authorization ?? "")?.[1];
+}
+
+/**
+ * リクエストのトークンから、backend を呼ぶための認証情報を決める。
+ * - slk_ で始まる：API キーとしてそのまま使う
+ * - それ以外：OAuth が有効なら、backend で交換する
+ * 使えなければ undefined（401 を返す）
+ */
+async function resolveCredential(req: Request, oauth: OAuthConfig | undefined): Promise<Credential | undefined> {
+  const token = extractBearer(req);
+  if (!token) {
+    return undefined;
+  }
+  if (token.startsWith(API_KEY_PREFIX)) {
+    return { kind: "api-key", token };
+  }
+  if (!oauth) {
+    return undefined;
+  }
+  const exchanged = await exchangeToken(token);
+  return exchanged ? { kind: "oauth", token: exchanged } : undefined;
 }
 
 function jsonRpcError(code: number, message: string) {
