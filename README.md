@@ -31,7 +31,7 @@ API キーの設計仕様は SELENE 本体リポジトリの [`Document/Architec
 - レシート画像の読み取りは提供しない。クライアント側の LLM が画像を読み、`create_transaction` で登録する
 - 取引の更新は全体の置き換え。`get_transaction_detail` で取得してから、全体を `update_transaction` に渡す
 - カテゴリのリセット・並べ替え、ユーザー設定の更新、エクスポート、全データ削除は API キーでは使えない（SELENE の画面から操作する）
-- リモート（HTTP）では、API キーを `Authorization` ヘッダーで渡せるクライアント（Claude Code など）だけが使える。claude.ai やスマホのコネクタ向けの OAuth 対応は [ServerlessKakeibo#100](https://github.com/Riri-Inferno/ServerlessKakeibo/issues/100) で対応する予定
+- claude.ai やスマホのカスタムコネクタからの OAuth での接続は、実装済みでリリース環境への設定待ち（[ServerlessKakeibo#110](https://github.com/Riri-Inferno/ServerlessKakeibo/issues/110)）。設計は [docs/architecture.md](docs/architecture.md) の「OAuth で接続する」
 
 ## クイックスタート（Docker）
 
@@ -50,8 +50,10 @@ docker run -i --rm \
 
 `MCP_TRANSPORT=http` で起動すると、`POST /mcp` で MCP を待ち受ける（ステートレス）。SELENE の k3s では `https://mcp-kakeibo.riri-inferno.com/mcp` で公開している。
 
-- 認証は SELENE 本体に任せる。リクエストの `Authorization: Bearer slk_...` を、そのまま SELENE API に転送する（サーバーは API キーを保存しない）
-- ヘッダーがない、または `slk_` で始まらない場合は 401
+- 認証は SELENE 本体に任せる（サーバーは API キーもトークンも保存しない）
+  - `Authorization: Bearer slk_...`（API キー）は、そのまま SELENE API に転送する
+  - それ以外は OAuth のアクセストークンとして、SELENE で backend 宛ての短命なトークンに交換してから使う（`MCP_RESOURCE_URL` と `MCP_AUTHORIZATION_SERVER` を設定したとき）
+- トークンがない、または使えない場合は 401。OAuth が有効なら、`WWW-Authenticate` で Protected Resource Metadata（`/.well-known/oauth-protected-resource/mcp`）を案内する
 - `MCP_ALLOWED_HOSTS` 以外の Host ヘッダーは 403（DNS rebinding 対策）
 - `GET /healthz` は死活監視用（認証なし）
 
@@ -95,6 +97,8 @@ Claude Desktop の `claude_desktop_config.json` または Claude Code の `.mcp.
 | `MCP_TRANSPORT` | — | `stdio` | `stdio` または `http` |
 | `PORT` | — | `3000` | HTTP モードの待ち受けポート |
 | `MCP_ALLOWED_HOSTS` | — | （検証しない） | HTTP モードで許可する Host ヘッダー（カンマ区切り）。公開時は必ず指定する |
+| `MCP_RESOURCE_URL` | OAuth のみ | — | この MCP サーバーの `/mcp` の URL（例: `https://mcp-kakeibo.riri-inferno.com/mcp`）。SELENE の `OAuth__McpResource` と**文字列として完全に一致**させる |
+| `MCP_AUTHORIZATION_SERVER` | OAuth のみ | — | 認可サーバー（SELENE backend）の issuer（例: `https://api-kakeibo.riri-inferno.com/`）。SELENE の `OAuth__Issuer` と同じ値 |
 
 `SELENE_API_KEY` が必須なのは stdio モードだけ。HTTP モードではリクエストのヘッダーのキーを使う。
 
@@ -177,6 +181,7 @@ src/
 ├── server.ts            # McpServer の生成と各 Tool の register 呼び出し
 ├── http.ts              # Streamable HTTP（ステートレス、API キーの転送）
 ├── seleneClient.ts      # 共通 HTTP ヘルパ（GET/POST/PUT/DELETE、Bearer、エラー時の対処ヒント）
+├── oauth.ts             # OAuth のリソースサーバー（Protected Resource Metadata、401、トークン交換）
 └── tools/
     ├── categories.ts
     ├── transactions.ts

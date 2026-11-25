@@ -5,7 +5,7 @@ selene-mcp-server を自宅の k3s（raspi5）に Pod として常駐させ、St
 接続の方法は 2 つ。
 
 - **API キーで接続**：SELENE の画面で発行した API キーを、`Authorization` ヘッダーで渡す。Claude Code など、ヘッダーを設定できるクライアント向け
-- **OAuth で接続**（未実装）：ユーザーは SELENE の既存のログイン（Google / GitHub）で承認するだけでよく、API キーを手で発行して貼る必要がない。Claude アプリのカスタムコネクタ向け
+- **OAuth で接続**：ユーザーは SELENE の既存のログイン（Google / GitHub）で承認するだけでよく、API キーを手で発行して貼る必要がない。Claude アプリのカスタムコネクタ向け
 
 特定のモデルやクライアントに縛られないように、MCP の標準（Streamable HTTP と MCP Authorization）に沿って作る。
 
@@ -31,7 +31,7 @@ flowchart LR
     DB[("PostgreSQL")]
   end
 
-  CA -- "HTTPS + OAuth トークン（未実装）" --> DNS
+  CA -- "HTTPS + OAuth トークン" --> DNS
   CC -- "HTTPS + Bearer slk_..." --> DNS
   DNS --> Tunnel --> CFD
   CFD -- "Host: mcp-kakeibo.riri-inferno.com" --> MCP
@@ -77,7 +77,7 @@ sequenceDiagram
   M->>M: 応答後に McpServer と Transport を破棄
 ```
 
-## OAuth で接続する（未実装）
+## OAuth で接続する
 
 Claude アプリのカスタムコネクタから、ユーザーごとに自分の SELENE アカウントで接続できるようにする。SELENE の backend を OAuth の認可サーバーにし、MCP サーバーはリソースサーバーになる。
 
@@ -87,6 +87,8 @@ Claude アプリのカスタムコネクタから、ユーザーごとに自分�
 - [oauth-authorization-server.md](https://github.com/Riri-Inferno/ServerlessKakeibo/blob/develop/Document/Architecture/oauth-authorization-server.md)：backend の認可サーバーの実装
 
 ここでは、MCP サーバーが受け持つことだけを書く（ServerlessKakeibo#109）。
+
+`MCP_RESOURCE_URL` と `MCP_AUTHORIZATION_SERVER` を設定したときだけ有効になる（`src/oauth.ts`）。設定しなければ、API キーでの接続だけを受け付ける（今までどおり）。
 
 ### MCP サーバーの役割
 
